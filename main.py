@@ -5,11 +5,11 @@ REELFIX - Telegram Bot для обработки видео
 import logging
 import asyncio
 import os
-from aiogram import Bot, Dispatcher, html
+from aiogram import Bot, Dispatcher, Router, html
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
+from aiogram.fsm.storage.memory import MemoryStorage
 
 from config import config
 from handlers import start, video, settings, help as help_handler
@@ -22,61 +22,38 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# Инициализация диспетчера
-dp = Dispatcher()
+# Инициализация диспетчера с явным FSM-хранилищем.
+# Без storage FSM (FSMContext в handlers/video.py) может не работать.
+dp = Dispatcher(storage=MemoryStorage())
 
 
-# Регистрация роутеров
+# Регистрация роутеров.
+# ВАЖНО: обработчики на уровне Dispatcher (@dp.message) в aiogram
+# проверяются ПЕРЕД роутерами. Поэтому echo_handler нельзя вешать
+# на dp — он перехватит ВСЕ сообщения (включая видео) и роутер
+# handlers/video.py никогда не сработает. Fallback-роутер подключаем
+# ПОСЛЕДНИМ, чтобы он был именно запасным.
 dp.include_router(start.router)
 dp.include_router(video.router)
 dp.include_router(settings.router)
 dp.include_router(help_handler.router)
 
-
-@dp.message(CommandStart())
-async def command_start_handler(message: Message) -> None:
-    """
-    Обработка команды /start
-    
-    Args:
-        message: Объект сообщения от пользователя
-    """
-    await start.start_handler(message)
+fallback_router = Router()
 
 
-@dp.message(Command("settings"))
-async def command_settings_handler(message: Message) -> None:
-    """
-    Обработка команды /settings
-    
-    Args:
-        message: Объект сообщения от пользователя
-    """
-    await settings.settings_handler(message)
-
-
-@dp.message(Command("help"))
-async def command_help_handler(message: Message) -> None:
-    """
-    Обработка команды /help
-    
-    Args:
-        message: Объект сообщения от пользователя
-    """
-    await help_handler.help_handler(message)
-
-
-@dp.message()
+@fallback_router.message()
 async def echo_handler(message: Message) -> None:
     """
-    Обработка всех остальных сообщений
-    
+    Fallback-обработчик всех остальных сообщений.
+    Срабатывает только если ни один роутер выше не обработал апдейт.
+
     Args:
         message: Объект сообщения от пользователя
     """
     try:
+        user_name = message.from_user.full_name if message.from_user else "друг"
         await message.answer(
-            f"👋 Привет, {html.bold(message.from_user.full_name)}!\n\n"
+            f"👋 Привет, {html.bold(user_name)}!\n\n"
             f"Я REELFIX - бот для обработки видео.\n\n"
             f"Используй команды:\n"
             f"/start - Главное меню\n"
@@ -87,6 +64,9 @@ async def echo_handler(message: Message) -> None:
         )
     except Exception as e:
         logger.error(f"Ошибка в echo_handler: {e}")
+
+
+dp.include_router(fallback_router)
 
 
 # --- Health server for Render (web_service requires open PORT) ---
