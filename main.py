@@ -4,6 +4,7 @@ REELFIX - Telegram Bot для обработки видео
 """
 import logging
 import asyncio
+import os
 from aiogram import Bot, Dispatcher, html
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -88,11 +89,82 @@ async def echo_handler(message: Message) -> None:
         logger.error(f"Ошибка в echo_handler: {e}")
 
 
+# --- Health server for Render (web_service requires open PORT) ---
+
+async def _health_handler(request):
+    try:
+        from aiohttp import web
+        return web.Response(text="OK", status=200)
+    except Exception:
+        return None
+
+
+async def start_health_server():
+    """
+    Запуск лёгкого HTTP health-сервера на PORT (Render).
+    Нужен, потому что сервис создан как web_service и без открытого
+    порта Render помечает деплой как update_failed: No open ports detected.
+    Возвращает runner (aiohttp) или None при fallback на stdlib.
+    """
+    port = int(os.getenv("PORT", "10000"))
+    host = "0.0.0.0"
+
+    # Основной путь: aiohttp (зависимость aiogram, теперь явно в requirements)
+    try:
+        from aiohttp import web
+
+        async def health(request):
+            return web.Response(text="OK", status=200)
+
+        app = web.Application()
+        app.router.add_get("/", health)
+        app.router.add_get("/health", health)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, host, port)
+        await site.start()
+        logger.info(f"✅ Health server listening on {host}:{port}")
+        return runner
+    except Exception as e:
+        logger.warning(f"aiohttp health server failed ({e}), fallback to stdlib")
+
+    # Fallback: stdlib http.server в отдельном потоке
+    try:
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        import threading
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"OK")
+
+            def log_message(self, format, *args):
+                return
+
+        server = ThreadingHTTPServer((host, port), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        logger.info(f"✅ Health server (stdlib) listening on {host}:{port}")
+        # Сохраняем ссылку, чтобы не потерять объект
+        start_health_server._stdlib_server = server
+        return None
+    except Exception as e:
+        logger.error(f"❌ Не удалось запустить health server: {e}")
+        return None
+
+
 async def main() -> None:
     """
     Основная функция запуска бота
     """
+    health_runner = None
     try:
+        # Health server запускаем ПЕРВЫМ, чтобы Render сразу видел открытый порт,
+        # даже пока импортируются тяжёлые зависимости / инициализируется бот
+        health_runner = await start_health_server()
+
         # Проверка обязательных переменных
         config.validate()
         
@@ -116,6 +188,12 @@ async def main() -> None:
     except Exception as e:
         logger.error(f"❌ Ошибка запуска бота: {e}")
         raise
+    finally:
+        if health_runner is not None:
+            try:
+                await health_runner.cleanup()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
