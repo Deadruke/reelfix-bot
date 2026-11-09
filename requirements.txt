@@ -1,5 +1,4 @@
 aiogram==3.4.1
-whisper==20231117
 openai-whisper
 torch==2.1.0
 torchvision==0.16.0
@@ -10,8 +9,7 @@ ffmpeg-python==0.2.0
 moviepy==1.0.3
 pydub==0.25.1
 python-dotenv==1.0.0
-aiofiles==23.2.1
-asyncio==3.4.3
+naiofiles==23.2.1
 httpx==0.25.2
 uvicorn==0.23.2
 fastapi==0.104.1
