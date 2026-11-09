@@ -1,7 +1,6 @@
 """
 Сервис для работы с Whisper - автоматические субтитры
 """
-import whisper
 import os
 from typing import List, Dict, Optional
 import logging
@@ -11,28 +10,36 @@ logger = logging.getLogger(__name__)
 
 class WhisperService:
     """Сервис для генерации субтитров с помощью Whisper AI"""
-    
+
     def __init__(self, model_size: str = "base"):
         """
         Инициализация Whisper сервиса
-        
+
         Args:
             model_size: Размер модели (tiny, base, small, medium, large)
         """
         self.model_size = model_size
         self.model = None
-        self._load_model()
-    
+        # Модель НЕ загружаем в __init__: импорт whisper/torch и скачивание
+        # модели на старте бота тормозят запуск и мешают Render открыть порт.
+        # Загрузка происходит лениво при первом вызове transcribe/translate.
+
     def _load_model(self):
-        """Загрузка модели Whisper"""
+        """Загрузка модели Whisper (ленивый импорт whisper/torch)"""
         try:
+            import whisper
             logger.info(f"Загрузка модели Whisper: {self.model_size}")
             self.model = whisper.load_model(self.model_size)
             logger.info("Модель Whisper успешно загружена")
         except Exception as e:
             logger.error(f"Ошибка загрузки модели Whisper: {e}")
             raise
-    
+
+    def _ensure_model(self):
+        """Загрузить модель при первом использовании"""
+        if self.model is None:
+            self._load_model()
+
     def transcribe(
         self,
         audio_path: str,
@@ -53,6 +60,7 @@ class WhisperService:
             Словарь с результатами транскрибации
         """
         try:
+            self._ensure_model()
             logger.info(f"Начало транскрибации: {audio_path}")
             
             result = self.model.transcribe(
@@ -68,7 +76,7 @@ class WhisperService:
         except Exception as e:
             logger.error(f"Ошибка транскрибации: {e}")
             raise
-    
+
     def generate_subtitles(
         self,
         audio_path: str,
@@ -106,7 +114,7 @@ class WhisperService:
         except Exception as e:
             logger.error(f"Ошибка генерации субтитров: {e}")
             raise
-    
+
     def _format_subtitles(
         self,
         result: Dict,
@@ -118,7 +126,7 @@ class WhisperService:
         
         Args:
             result: Результат транскрибации
-            output_format: Формат вывода
+            output_format: Формат субтитров (srt, vtt)
             style: Стиль
             
         Returns:
@@ -130,7 +138,7 @@ class WhisperService:
             return self._format_vtt(result, style)
         else:
             raise ValueError(f"Неподдерживаемый формат: {output_format}")
-    
+
     def _format_srt(self, result: Dict, style: str) -> str:
         """Форматирование в SRT"""
         lines = []
@@ -146,7 +154,7 @@ class WhisperService:
             lines.append(f"{i}\n{start} --> {end}\n{text}\n")
         
         return "\n".join(lines)
-    
+
     def _format_vtt(self, result: Dict, style: str) -> str:
         """Форматирование в VTT"""
         lines = ["WEBVTT\n\n"]
@@ -162,7 +170,7 @@ class WhisperService:
             lines.append(f"{start} --> {end}\n{text}\n")
         
         return "\n".join(lines)
-    
+
     def _format_timestamp(self, seconds: float) -> str:
         """Форматирование времени в формат HH:MM:SS,mmm"""
         hours = int(seconds // 3600)
@@ -171,7 +179,7 @@ class WhisperService:
         millis = int((seconds % 1) * 1000)
         
         return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
-    
+
     def _apply_style(self, text: str, style: str) -> str:
         """Применение стиля к тексту"""
         # Базовые стили (можно расширить)
@@ -189,7 +197,7 @@ class WhisperService:
         }
         
         return styles.get(style, text)
-    
+
     def translate(self, audio_path: str, target_language: str = "en") -> Dict:
         """
         Перевод аудио на другой язык
@@ -216,16 +224,18 @@ class WhisperService:
         except Exception as e:
             logger.error(f"Ошибка перевода: {e}")
             raise
-    
+
     def get_available_models(self) -> List[str]:
         """Получить список доступных моделей"""
         return ["tiny", "base", "small", "medium", "large"]
-    
+
     def set_model(self, model_size: str):
         """Сменить модель"""
         if model_size not in self.get_available_models():
             raise ValueError(f"Неподдерживаемая модель: {model_size}")
         
         self.model_size = model_size
-        self._load_model()
+        # Если модель уже была загружена — перезагружаем, иначе отложим до первого вызова
+        if self.model is not None:
+            self._load_model()
         logger.info(f"Модель изменена на: {model_size}")
